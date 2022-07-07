@@ -1,0 +1,1430 @@
+---
+title: "COVID-19 Report"
+author: "Carlos Delgado Salas"
+output:
+  pdf_document: default
+classoption: landscape
+---
+# Report Date: `r format(Sys.Date(), format="%B %d %Y")`
+
+### You can contact me through:
+
+### <https://cdelgadosalas.com>
+
+## Datasets
+
+This document shows visualizations of the rate of infection of COVID 19 in different places. This document was put together on `r Sys.Date()`. The data sources come from github repositories of:
+
+- Johns Hopkins CSSE
+<https://github.com/CSSEGISandData/COVID-19>
+
+- CovidTracking.com by The Atlantic
+<https://covidtracking.com/data>
+
+- New York Times
+<https://github.com/nytimes/covid-19-data>
+
+- Our World in Data
+<https://github.com/owid/covid-19-data> 
+
+
+```{r, echo=FALSE, warning=FALSE, message= FALSE}
+
+setwd("C:/Users/wb523778/OneDrive - WBG/Documents/COVID Report")
+
+##### Library #######
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(readxl)
+library(maps)
+library(mapproj)
+library(ggthemes)
+library(socviz)
+library(knitr)
+
+############ DATA ##################
+
+vaccine <- read.csv("https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/vaccinations.csv")
+
+vaccine_us <- read.csv("https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/us_state_vaccinations.csv")
+
+cv_data <- read.csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv")
+
+cv_data2 <- read.csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv")
+
+dates <- seq(ymd("2020/1/22"), Sys.Date()-1, by = "day")
+
+colnames(cv_data)[5:ncol(cv_data)] <- as.Date(dates)
+
+colnames(cv_data2)[5:ncol(cv_data2)] <- as.Date(dates)
+
+corona <- gather(cv_data, "date", "cases", 5:ncol(cv_data))
+
+corona$date <- as.Date(as.numeric(corona$date), origin = "1970-01-01")
+
+corona_deaths <- gather(cv_data2, "date", "deaths", 5:ncol(cv_data))
+
+corona_deaths$date <- as.Date(as.numeric(corona_deaths$date), origin = "1970-01-01")
+
+corona <- corona %>%
+  group_by(Province.State, Country.Region, Lat, Long) %>%
+  arrange(date) %>%
+  mutate(new_cases = ifelse(cases - lag(cases, default = first(cases))<0,0,cases - lag(cases, default = first(cases))))
+
+us <-  read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv")
+
+us$fips <- ifelse(us$fips<10, as.character(paste0("0",us$fips)), as.character(us$fips))
+
+us <- us %>%
+  group_by(state, fips) %>% 
+  arrange(state, date) %>%
+  mutate(new_cases = ifelse(cases - lag(cases, default = first(cases))<0,0,cases - lag(cases, default = first(cases))))
+
+us$date <- ymd(us$date)
+
+us_map <- us %>%
+  filter(date > max(date)-3) %>%
+  group_by(state) %>% 
+  mutate(new_cases_3day = sum(new_cases)) %>% 
+  filter(new_cases_3day != 0 & date == max(date))
+
+us_map <- us_map %>%
+  mutate(new_cases_3day_perc = (new_cases_3day/sum(us_map$new_cases_3day))*100)
+
+top5 <- us_map %>% arrange(-new_cases_3day) %>% head(5) %>% select(state)
+
+top10 <- us_map %>% arrange(-new_cases_3day) %>% head(10) %>% select(state)
+
+us_top5 <- us[us$state %in% top5$state,]
+
+us$class[!us$state %in% top10$state] <- "Rest of States"
+
+us$class[us$state %in% top10$state] <- "Top 10 Hotspot States"
+
+us_hs <- us %>% 
+  group_by(date, class) %>% 
+  summarise(new_cases = sum(new_cases))
+
+us_hs$class <- factor(us_hs$class, levels = c("Top 10 Hotspot States", "Rest of States"))
+
+us_map$region <- tolower(us_map$state)
+us_states <- map_data("state")
+us_states_map <- left_join(us_states, us_map)
+
+us_help <- us[us$date == max(us$date),][2:3]
+
+us_more <- read.csv("https://covidtracking.com/api/v1/states/daily.csv")
+
+us_more$date <- ymd(us_more$date)
+
+us_more$fips <- ifelse(us_more$fips<10, as.character(paste0("0",us_more$fips)), as.character(us_more$fips))
+
+us_more <- us_more %>% left_join(us_help, by = "fips")
+
+us_more$positiveIncrease <- ifelse(us_more$positiveIncrease < 0,
+                                   0,
+                                   us_more$positiveIncrease)
+
+us_more$totalTestResultsIncrease <- ifelse(us_more$totalTestResultsIncrease < 0,
+                                   0,
+                                   us_more$totalTestResultsIncrease)
+
+colors <- c("Tests" = "orange", "Positive Cases" = "steelblue")
+
+counties <-  read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv")
+
+counties$fips <- ifelse(counties$fips<10000, as.character(paste0("0",counties$fips)), as.character(counties$fips))
+
+counties$date <- as.Date(counties$date)
+
+counties <- counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)))
+
+counties_map <- counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases_week = cases - lag(cases, 7, 0)) %>% 
+  filter(date == max(date))
+
+# Creating the padding function
+padding <- function(x) {
+  # Modifies a numeric vector and returns a vector of two characters
+  # Args:
+  #       x: a numerical vector
+  # Returns:
+  #          The same vector transformed each position into two characters
+  # Error handling:
+  if (!is.numeric(x)) {
+    stop("Argument(s) of x need to be numerical") 
+  }
+  y <- c()
+  for(i in 1:length(x)) {
+    if (x[i] >= 10) {
+      y[i] <- as.character(x[i])
+    } else {
+      y[i] <- as.character(paste0("0", x[i]))
+    }
+  }
+  return(y)
+}
+
+padding2 <- function(x) {
+  # Modifies a numeric vector and returns a vector of two characters
+  # Args:
+  #       x: a numerical vector
+  # Returns:
+  #          The same vector transformed each position into two characters
+  # Error handling:
+  if (!is.numeric(x)) {
+    stop("Argument(s) of x need to be numerical") 
+  }
+  y <- c()
+  for(i in 1:length(x)) {
+    if (x[i] >= 100) {
+      y[i] <- as.character(x[i])
+    } else if (x[i] >= 10){
+      y[i] <- as.character(paste0("0", x[i]))
+    } else {
+      y[i] <- as.character(paste0("00", x[i]))
+    }
+  }
+  return(y)
+}
+
+county_pop <- read.csv("https://www2.census.gov/programs-surveys/popest/datasets/2010-2019/counties/totals/co-est2019-alldata.csv")
+
+county_pop$fips <- paste0(padding(county_pop$STATE),padding2(county_pop$COUNTY))
+
+county_pop_int <- county_pop[c("STNAME", "CTYNAME", "POPESTIMATE2019", "fips")] 
+
+county_pop_int <- county_pop_int %>% 
+  left_join(counties_map, by = "fips")
+
+county_pop_int$new_cases_week_by_thousand <- (county_pop_int$new_cases_week/county_pop_int$POPESTIMATE2019)*1000
+
+counties_map$new_cases_week[counties_map$new_cases_week<0] <- 0
+
+counties_map$new_cases_week[is.na(counties_map$new_cases_week)] <- 0
+
+county_pop_int$new_cases_week_by_thousand[county_pop_int$new_cases_week_by_thousand<0] <- 0
+
+county_pop_int$new_cases_week_by_thousand[is.na(county_pop_int$new_cases_week_by_thousand)] <- 0 
+
+map_data <- left_join(county_map, counties_map, by = c("id" = "fips"))
+
+map_data2 <- left_join(county_map, county_pop_int, by = c("id" = "fips"))
+
+map_data$new_cases_week[is.na(map_data$new_cases_week)] <- 0
+
+map_data2$new_cases_week_by_thousand[is.na(map_data$new_cases_week_by_thousand)] <- 0
+
+
+continent <- read.csv("continent.csv")
+
+# continent <- continent %>% 
+#   mutate(Region_Eng = case_when(Region == "Africa" ~ "Africa",
+#                                 Region == "America del Norte" ~ "North America",
+#                                 Region == "Asia" ~ "Asia",
+#                                 Region == "Europa" ~ "Europe",
+#                                 Region == "America Latina y Caribe" ~ "Latin America and Caribbean",
+#                                 Region == "Oceania" ~ "Oceania"))
+
+corona <- corona %>% 
+  left_join(continent)
+
+corona_deaths <- corona_deaths %>% 
+  left_join(continent)
+
+interest <- corona %>%
+  group_by(Province.State, Country.Region, Lat, Long) %>%
+  arrange(date) %>%
+  mutate(new_cases = ifelse(cases - lag(cases, default = first(cases))<0,
+                            0,
+                            cases - lag(cases, default = first(cases))))
+
+regions <- interest %>% 
+  group_by(Region_Eng, date) %>% 
+  summarise(new_cases = sum(new_cases)) %>% 
+  filter(Region_Eng != "")
+
+interest_deaths <- corona_deaths %>%
+  group_by(Province.State, Country.Region, Lat, Long) %>%
+  arrange(date) %>%
+  mutate(new_deaths = ifelse(deaths - lag(deaths, default = first(deaths))<0,
+                            0,
+                            deaths - lag(deaths, default = first(deaths))))
+
+regions_deaths <- interest_deaths %>% 
+  group_by(Region_Eng, date) %>% 
+  summarise(new_deaths = sum(new_deaths)) %>% 
+  filter(Region_Eng != "")
+
+# DMV
+dmv_counties <- counties %>% 
+  filter(state == "District of Columbia"| 
+           (state == "Maryland" & county == "Montgomery")|
+           (state == "Maryland" & county == "Prince George's")|
+           (state == "Virginia" & county == "Arlington")|
+           (state == "Virginia" & county == "Alexandria city")|
+           (state == "Virginia" & county == "Falls Church city")|
+           (state == "Virginia" & county == "Fairfax")|
+           (state == "Virginia" & county == "Fairfax city"))
+
+
+dmv_counties <- dmv_counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)))
+
+dmv_counties$date <- ymd(dmv_counties$date)
+
+# SFL
+sfl_counties <- counties %>% 
+  filter((state == "Florida" & county == "Broward")|
+           (state == "Florida" & county == "Miami-Dade"))
+
+
+sfl_counties <- sfl_counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)))
+
+sfl_counties$date <- ymd(sfl_counties$date)
+
+# HOU
+hou_counties <- counties %>% 
+  filter((state == "Texas" & county == "Harris"))
+
+
+hou_counties <- hou_counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)))
+
+hou_counties$date <- ymd(hou_counties$date)
+
+# SEA
+sea_counties <- counties %>% 
+  filter((state == "Washington" & county == "King")|
+           (state == "Washington" & county == "Pierce")|
+           (state == "Washington" & county == "Snohomish"))
+
+sea_counties <- sea_counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)))
+
+sea_counties$date <- ymd(sea_counties$date)
+
+# BAY
+bay_counties <- counties %>% 
+  filter((state == "California" & county == "San Francisco")|
+           (state == "California" & county == "San Mateo")|
+           (state == "California" & county == "Santa Clara")|
+           (state == "California" & county == "Alameda")|
+           (state == "California" & county == "Contra Costa")|
+           (state == "California" & county == "Solano")|
+           (state == "California" & county == "Sonoma")|
+           (state == "California" & county == "Napa")|
+           (state == "California" & county == "Marin"))
+
+bay_counties <- bay_counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)))
+
+bay_counties$date <- ymd(bay_counties$date)
+
+
+# COL - DENEVER
+den_counties <- counties %>% 
+  filter((state == "Colorado" & county == "Boulder")|
+           (state == "Colorado" & county == "Broomfield")|
+           (state == "Colorado" & county == "Denver")|
+           (state == "Colorado" & county == "Weld"))
+
+den_counties <- den_counties %>%
+  group_by(county, state, fips) %>% 
+  arrange(state, county, date) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)))
+
+den_counties$date <- ymd(den_counties$date)
+
+############ VACCINES ##################
+
+vac_now_us <- vaccine_us %>% 
+  group_by(location) %>% 
+  filter(date == max(date)) %>% 
+  select(location, date, people_fully_vaccinated_per_hundred)
+
+vac_now_us$region <- tolower(vac_now_us$location)
+
+vac_now_us$region[vac_now_us$region == "new york state"] <- "new york"
+
+MainStates <- map_data("state")
+
+MergedStates <- left_join(MainStates, vac_now_us, by = "region")
+
+vac_now_us_table <- unique(MergedStates[,c(7,9)])
+
+row.names(vac_now_us_table) <- NULL
+
+colnames(vac_now_us_table) <- c("State", "Percent of people fully vaccinated")
+
+vac_now <- vaccine %>% 
+  group_by(location) %>% 
+  filter(date == max(date)) %>% 
+  select(location, date, people_fully_vaccinated_per_hundred)
+
+regions_vac <- read_csv("regions_vac.csv")
+
+vac_now <- vac_now %>% 
+  left_join(regions_vac, by = "location") %>% 
+  drop_na(people_fully_vaccinated_per_hundred)
+
+
+
+############ PLOTS ##################
+
+plotusmap_vac <- ggplot(data = MergedStates,
+                    mapping = aes(x = long, y = lat, group = group, fill = people_fully_vaccinated_per_hundred)) +
+  geom_polygon(color = "gray40", size = 0.075) + #coord_equal() +
+    scale_fill_gradient(low = "white", high = "darkblue", na.value = "gray60") +
+  labs(title = paste0("People fully vaccinated (", max(MergedStates$date, na.rm = T), ")")) + 
+  labs(fill = "Percentage of people") + 
+  theme_map() + theme(legend.position = "right")
+
+
+plotregions <- regions %>%
+  ggplot(aes(x= date, y= new_cases, color= Region_Eng))+
+  geom_point(stat="identity", alpha = 0.2) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  labs(caption="Source: Johns Hopkins University
+       Author: @cdelgadosalas") +
+  labs(title= paste0("New cases of COVID-19 (", max(corona$date), ")"), 
+        y="New cases", x = "Date") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotregions_deaths <- regions_deaths %>%
+  ggplot(aes(x= date, y= new_deaths, color= Region_Eng))+
+  geom_point(stat="identity", alpha = 0.2) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  labs(caption="Source: Johns Hopkins University
+       Author: @cdelgadosalas") +
+  labs(title= paste0("New deaths of COVID-19 (", max(corona$date), ")"), 
+        y="New deaths", x = "Date") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotspain <- corona[corona$Country.Region == "Spain",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Spain", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotitaly <- corona[corona$Country.Region == "Italy",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Italy", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotger <- corona[corona$Country.Region == "Germany",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Germany", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotfra <- corona[corona$Country.Region == "France" & corona$Province.State == "",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("France", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotpor <- corona[corona$Country.Region == "Portugal",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Portugal", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotus <- corona[corona$Country.Region == "US",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("USA", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotbra <- corona[corona$Country.Region == "Brazil",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Brazil", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotven <- corona[corona$Country.Region == "Venezuela",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Venezuela", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcol <- corona[corona$Country.Region == "Colombia",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Colombia", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotmex <- corona[corona$Country.Region == "Mexico",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Mexico", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotarg <- corona[corona$Country.Region == "Argentina",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Argentina", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotbol <- corona[corona$Country.Region == "Bolivia",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Bolivia", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcri <- corona[corona$Country.Region == "Costa Rica",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Costa Rica", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotdrp <- corona[corona$Country.Region == "Dominican Republic",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Dominican Republic", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotnic <- corona[corona$Country.Region == "Nicaragua",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Nicaragua", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotesv <- corona[corona$Country.Region == "El Salvador",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("El Salvador", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+
+plotpan <- corona[corona$Country.Region == "Panama",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Panama", max(corona$date))) +
+  labs(caption="Source: Johns Hopkins University
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+
+plotusmap <- ggplot(data = map_data,
+                    mapping = aes(x = long, y = lat, group = group, fill = new_cases_week)) +
+  geom_polygon(color = "gray40", size = 0.075) + coord_equal() +
+  scale_fill_gradient(low = "white", high = "darkred") +
+  labs(title = paste0("New COVID-19 cases in last week (", max(counties_map$date), ")")) + 
+  labs(fill = "Number of new weekly cases") + 
+  theme_map() + theme(legend.position = "right")
+
+plotusmap2 <- ggplot(data = map_data2,
+                    mapping = aes(x = long, y = lat, group = group, fill = new_cases_week_by_thousand)) +
+  geom_polygon(color = "gray40", size = 0.075) + coord_equal() +
+  scale_fill_gradient(low = "white", high = "darkred") +
+  labs(title = paste0("New COVID-19 cases in last week by thousand people (", max(counties_map$date), ")")) + 
+  labs(fill = "Number of new weekly cases by thousand people") + 
+  theme_map() + theme(legend.position = "right")
+
+plotus_hs <- us_hs %>%
+  ggplot(aes(x= date, y= new_cases, color= class))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("US top 10 states with most new cases reported in last 3 days",max(corona$date))) +
+  labs(caption=paste("Source: New York Times
+       Created by @cdelgadosalas")) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotus_top5 <- us_top5 %>%
+  ggplot(aes(x= date, y= new_cases, color= state))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("US top 5 states with most new cases reported in last 3 days", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotdc <- us[us$state == "District of Columbia",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("District of Columbia", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotdc2 <- us_more[us_more$state.y == "District of Columbia",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("District of Columbia daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotva <- us[us$state == "Virginia",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Virginia", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotva2 <- us_more[us_more$state.y == "Virginia",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Virginia daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotmd <- us[us$state == "Maryland",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Maryland", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotmd2 <- us_more[us_more$state.y == "Maryland",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Maryland daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotny <- us[us$state == "New York",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("New York", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotny2 <- us_more[us_more$state.y == "New York",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("New York daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotfl <- us[us$state == "Florida",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Florida", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotfl2 <- us_more[us_more$state.y == "Florida",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Florida daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotca <- us[us$state == "California",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("California", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotca2 <- us_more[us_more$state.y == "California",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("California daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotco <- us[us$state == "Colorado",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Colorado", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotco2 <- us_more[us_more$state.y == "Colorado",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Colorado daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotpr <- us[us$state == "Puerto Rico",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Puerto Rico", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotpr2 <- us_more[us_more$state.y == "Puerto Rico",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Puerto Rico daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plottx <- us[us$state == "Texas",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Texas", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plottx2 <- us_more[us_more$state.y == "Texas",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Texas daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotwa <- us[us$state == "Washington",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Washington", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotwa2 <- us_more[us_more$state.y == "Washington",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Washington daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotar <- us[us$state == "Arizona",] %>%
+  ggplot(aes(x= date, y= new_cases)) +
+  geom_bar(stat="identity", color="steelblue", alpha = 0.2) +
+  geom_smooth(color = 'red', method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Arizona", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotar2 <- us_more[us_more$state.y == "Arizona",] %>%
+  ggplot(aes(x= date)) +
+  geom_bar(aes(y= totalTestResultsIncrease, fill = "Tests"), stat="identity", alpha = 0.7) +
+  geom_bar(aes(y= positiveIncrease, fill = "Positive Cases"),stat="identity") +
+  geom_smooth(aes(x= date, y= positiveIncrease), color = "darkred", 
+              method = lm, formula = y ~ splines::bs(x, 11), se = FALSE) +
+  ggtitle(paste("Arizona daily COVID-19 tests and positive cases", max(us_more$date))) +
+  labs(caption="Source: CovidTracking.com
+       Created by @cdelgadosalas", 
+       x = "date", y = "# of tests/positive cases", fill = "Legend") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+
+plotdmv <- us[(us$state == "District of Columbia" |
+                 us$state == "Maryland"| 
+                 us$state == "Virginia"),] %>%
+  ggplot(aes(x= date, y= new_cases, color= state))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("DMV", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcounties_dmv <- dmv_counties %>%
+  ggplot(aes(x= date, y= new_cases, color= county))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("DC metro Counties", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcounties_sfl <- sfl_counties %>%
+  ggplot(aes(x= date, y= new_cases, color= county))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("Miami area Counties", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcounties_hou <- hou_counties %>%
+  ggplot(aes(x= date, y= new_cases, color= county))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("Houston Counties", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcounties_sea <- sea_counties %>%
+  ggplot(aes(x= date, y= new_cases, color= county))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("Seatle area Counties", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcounties_bay <- bay_counties %>%
+  ggplot(aes(x= date, y= new_cases, color= county))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("San Francisco Bay area Counties", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+plotcounties_den <- den_counties %>%
+  ggplot(aes(x= date, y= new_cases, color= county))+
+  geom_point(stat="identity", alpha = 0.1) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 11), se = FALSE)+
+  ggtitle(paste("Metro Denver Counties", max(corona$date))) +
+  labs(caption="Source: New York Times
+       Created by @cdelgadosalas") +
+  theme_minimal() +
+  scale_x_date(date_labels="%b",date_breaks = "1 month")
+
+
+```
+\pagebreak
+
+## Vaccine
+### Vaccine in the US
+
+Percentage of the population fully vaccinated (people who received all doses prescribed by the vaccination protocol) by US State 
+
+```{r, fig.align="center", fig.width=8, fig.height=4, echo=FALSE}
+plotusmap_vac
+```
+\pagebreak
+
+
+```{r, fig.align="center", fig.width=10, fig.height=6, echo=FALSE}
+kable(vac_now_us_table)
+```
+\pagebreak
+
+## World Regions
+### New Cases by Region
+
+New cases of infection of COVID-19 in world regions. 
+
+(The amount of new cases per day are shown in points (transparency added) and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotregions
+```
+
+\pagebreak
+
+### New Deaths by Region
+
+New deaths due to COVID-19 in world regions. 
+
+(The amount of new deaths per day are shown in points (transparency added) and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotregions_deaths
+```
+
+\pagebreak
+
+
+
+## Europe
+
+### Spain
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotspain
+```
+\pagebreak
+
+### Italy
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotitaly
+```
+\pagebreak
+
+### Germany
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotger
+```
+\pagebreak
+
+### France
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotfra
+```
+\pagebreak
+
+### Portugal
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotpor
+```
+\pagebreak
+
+## North and South America
+
+### USA
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotus
+```
+\pagebreak
+
+### Brazil
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotbra
+```
+\pagebreak
+
+### Venezuela
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotven
+```
+\pagebreak
+
+### Colombia
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcol
+```
+\pagebreak
+
+### Mexico
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotmex
+```
+\pagebreak
+
+### Argentina
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotarg
+```
+\pagebreak
+
+### Bolivia
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotbol
+```
+\pagebreak
+
+### Costa Rica
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcri
+```
+\pagebreak
+
+### Dominican Republic
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotdrp
+```
+\pagebreak
+
+
+### El Salvador
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotesv
+```
+\pagebreak
+
+### Panama
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotpan
+```
+\pagebreak
+
+### Nicaragua
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotnic
+```
+\pagebreak
+
+## Plots for different states in the USA
+
+### US county map
+
+US by county and new cases in the last week. This is a "Hotspot Map".
+
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotusmap
+```
+\pagebreak
+
+
+### US county map
+
+US by county and new cases in the last week by thousand people
+
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotusmap2
+```
+\pagebreak
+
+### Top 5 States with most cases
+
+These are the top 5 States in the United States with most reported new COVID-19 cases in the last 3 days.
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotus_top5
+```
+
+\pagebreak
+
+### Top 10 Hostspots States with most cases
+
+These are the top 10 States in the United States with most reported new COVID-19 cases in the last 3 days (`r top10$state`) against the rest of the States in the US
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotus_hs
+```
+\pagebreak
+
+### New York
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotny
+
+plotny2
+```
+\pagebreak
+
+### District of Columbia
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotdc
+
+plotdc2
+```
+\pagebreak
+
+### Virginia
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotva
+
+plotva2
+```
+\pagebreak
+
+### Maryland
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotmd
+
+plotmd2
+```
+\pagebreak
+
+### California
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotca
+
+plotca2
+```
+\pagebreak
+
+### Florida
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotfl
+
+plotfl2
+```
+\pagebreak
+
+### Colorado
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotco
+
+plotco2
+```
+\pagebreak
+
+### Texas
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plottx
+
+plottx2
+```
+\pagebreak
+
+### Washington (State)
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotwa
+
+plotwa2
+```
+\pagebreak
+
+### Arizona
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotar
+
+plotar2
+```
+\pagebreak
+
+### Puerto Rico
+
+Total Cases (with Loess Curve) and Total Cases (with Loess Curve) + Total testing
+
+(The amount of new cases per day are shown in a bar and a Loess regression curve is fitted into the data to smoothen the curve)
+(These graphs may vary since they come from different data sources)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE, warning=FALSE}
+plotpr
+
+plotpr2
+```
+\pagebreak
+
+
+## Plots for city areas and metropolitan areas (Compared by counties)
+
+### DMV (DC, Maryland and Virginia)
+
+(The amount of new cases per day are shown in transparent points and a Loess regression curve is fitted into the data to smoothen the curve)
+
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcounties_dmv
+```
+\pagebreak
+
+### Metro Denver counties
+
+(The amount of new cases per day are shown in transparent points and a Loess regression curve is fitted into the data to smoothen the curve)
+
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcounties_den
+```
+\pagebreak
+
+### Miami area counties
+
+(The amount of new cases per day are shown in transparent points and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcounties_sfl
+```
+\pagebreak
+
+
+### Seattle area counties 
+
+(The amount of new cases per day are shown in transparent points and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcounties_sea
+```
+\pagebreak
+
+### Houston area county
+
+(The amount of new cases per day are shown in transparent points and a Loess regression curve is fitted into the data to smoothen the curve)
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcounties_hou
+```
+\pagebreak
+
+### San Francisco Bay area counties
+
+(The amount of new cases per day are shown in transparent points and a Loess regression curve is fitted into the data to smoothen the curve)
+
+
+```{r, fig.align="center", fig.width=10, fig.height=5, echo=FALSE}
+plotcounties_bay
+```
+\pagebreak
